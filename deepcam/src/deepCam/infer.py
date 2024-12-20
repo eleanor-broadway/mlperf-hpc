@@ -36,7 +36,7 @@ import torch.optim as optim
 from torch.autograd import Variable
 
 # Custom
-from driver import train_epoch, validate
+from driver import inference
 from utils import parser
 from utils import losses
 from utils import optimizer_helpers as oh
@@ -44,8 +44,7 @@ from utils import bnstats as bns
 from data import get_dataloaders, get_datashapes
 from architecture import deeplab_xception
 
-# Tensorboard 
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
 
 # DDP
 import torch.distributed as dist
@@ -70,10 +69,9 @@ def main(pargs):
     logger = mll.mlperf_logger(log_file, "deepcam", "Umbrella Corp.")
     logger.log_start(key = "init_start", sync = True)        
     logger.log_event(key = "cache_clear")
-
-    # For Tensorboard
-    writer = SummaryWriter()
     
+    # writer = SummaryWriter()
+
     #set seed
     seed = pargs.seed
     logger.log_event(key = "seed", value = seed)
@@ -87,6 +85,9 @@ def main(pargs):
         torch.backends.cudnn.benchmark = True
     else:
         device = torch.device("cpu")
+
+    # print(device)
+        # cuda:0
         
     #set up directories
     root_dir = os.path.join(pargs.data_dir_prefix)
@@ -131,39 +132,40 @@ def main(pargs):
     #restart from checkpoint if desired
     if pargs.checkpoint is not None:
         checkpoint = torch.load(pargs.checkpoint, map_location = device)
-        start_step = checkpoint['step']
-        start_epoch = checkpoint['epoch']
+        # start_step = checkpoint['step']
+        # start_epoch = checkpoint['epoch']
         optimizer.load_state_dict(checkpoint['optimizer'])
         net.load_state_dict(checkpoint['model'])
+        logger.log_event(key="checkpoint_loaded", value=pargs.checkpoint)
     else:
-        start_step = 0
-        start_epoch = 0   
+        raise ValueError("A checkpoint must be specified for inference.")   
 
     #broadcast model and optimizer state
-    steptens = torch.tensor(np.array([start_step, start_epoch]), requires_grad=False).to(device)
-    if dist.is_initialized():
-        dist.broadcast(steptens, src = 0)
+    # steptens = torch.tensor(np.array([start_step, start_epoch]), requires_grad=False).to(device)
+    # if dist.is_initialized():
+        # dist.broadcast(steptens, src = 0)
+
         
     #unpack the bcasted tensor
-    start_step = int(steptens.cpu().numpy()[0])
-    start_epoch = int(steptens.cpu().numpy()[1])  
+    # start_step = int(steptens.cpu().numpy()[0])
+    # start_epoch = int(steptens.cpu().numpy()[1])  
                                     
     #select scheduler
-    scheduler = None
-    if pargs.lr_schedule:
-        pargs.lr_schedule["lr_warmup_steps"] = pargs.lr_warmup_steps
-        pargs.lr_schedule["lr_warmup_factor"] = pargs.lr_warmup_factor
-        scheduler = oh.get_lr_schedule(pargs.start_lr, pargs.lr_schedule, optimizer, logger, last_step = start_step)
+    # scheduler = None
+    # if pargs.lr_schedule:
+        # pargs.lr_schedule["lr_warmup_steps"] = pargs.lr_warmup_steps
+        # pargs.lr_schedule["lr_warmup_factor"] = pargs.lr_warmup_factor
+        # scheduler = oh.get_lr_schedule(pargs.start_lr, pargs.lr_schedule, optimizer, logger, last_step = start_step)
     
     # print parameters
-    if comm_rank == 0:
-        print(net)
-        print("Total number of elements:", sum(p.numel() for p in net.parameters() if p.requires_grad))
+    # if comm_rank == 0:
+        # print(net)
+        # print("Total number of elements:", sum(p.numel() for p in net.parameters() if p.requires_grad))
         
     # get input shapes for the upcoming model preprocessing
     # input_shape:
-    tshape, _ = get_datashapes(pargs, root_dir)
-    input_shape = tuple([tshape[2], tshape[0], tshape[1]])
+    # tshape, _ = get_datashapes(pargs, root_dir)
+    # input_shape = tuple([tshape[2], tshape[0], tshape[1]])
     
     #distributed model parameters
     bucket_cap_mb = 25
@@ -186,65 +188,74 @@ def main(pargs):
     net_train = ddp_net
         
     # Set up the data feeder
-    train_loader, train_size, validation_loader, validation_size, inference_loader = get_dataloaders(pargs, root_dir, device, seed, comm_size, comm_rank)
-    
+    # train_loader, train_size, validation_loader, validation_size = get_dataloaders(pargs, root_dir, device, seed, comm_size, comm_rank)
+    inference_loader = get_dataloaders(pargs, root_dir, device, seed, comm_size, comm_rank)
+
     # log size of datasets
-    logger.log_event(key = "train_samples", value = train_size)
-    val_size = validation_size
-    logger.log_event(key = "eval_samples", value = val_size)
+    # logger.log_event(key = "train_samples", value = train_size)
+    # val_size = validation_size
+    # logger.log_event(key = "eval_samples", value = val_size)
 
     # get start steps
-    step = start_step
-    epoch = start_epoch
-    current_lr = pargs.start_lr if not pargs.lr_schedule else scheduler.get_last_lr()[0]
-    stop_training = False
-    net_train.train()
+    # step = start_step
+    # epoch = start_epoch
+    # current_lr = pargs.start_lr if not pargs.lr_schedule else scheduler.get_last_lr()[0]
+    # stop_training = False
+    # net_train.train()
 
     # start trining
     logger.log_end(key = "init_stop", sync = True)
-    logger.log_start(key = "run_start", sync = True)
+    # logger.log_start(key = "run_inference_start", sync = True)
 
     # training loop
-    while True:
+    # while True:
 
         # start epoch
-        logger.log_start(key = "epoch_start", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync=True)
         start = time.time()
+        # logger.log_start(key = "epoch_start", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync=True)
 
-        train_loader.sampler.set_epoch(epoch)
+        # train_loader.sampler.set_epoch(epoch)
 
         # training
-        step = train_epoch(pargs, comm_rank, comm_size,
-                           device, step, epoch, 
-                           net_train, criterion, 
-                           optimizer, scheduler,
-                           train_loader,
-                           logger, writer)
+        # step = train_epoch(pargs, comm_rank, comm_size,
+        #                    device, step, epoch, 
+        #                    net_train, criterion, 
+        #                    optimizer, scheduler,
+        #                    train_loader,
+        #                    logger, writer)
 
         # average BN stats
-        bnstats_handler.synchronize()
+        # bnstats_handler.synchronize()
         
         # validation
-        stop_training = validate(pargs, comm_rank, comm_size,
-                                 device, step, epoch, 
-                                 net_validate, criterion, validation_loader, 
-                                 logger)
+        # stop_training = validate(pargs, comm_rank, comm_size,
+                                #  device, step, epoch, 
+                                #  net_validate, criterion, validation_loader, 
+                                #  logger)
+
+        # inference
+        predictions = inference(pargs, device, net, inference_loader, logger)
+
 
         # log the epoch
-        logger.log_end(key = "epoch_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
-        epoch += 1
-        total_time = time.time()-start
-        if comm_rank == 0: 
-            print(f"Time For Epoch", epoch, ":", total_time, "s")
 
-
-        # Use this to print out the energy counters after each epoch: 
+        # logger.log_end(key = "epoch_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
+        
         # command = ["rocm-smi", "--showenergycounter"]
         # result = sp.run(command, capture_output=True, text=True)
         # print(result.stdout)
 
-        # Moving this down so that it saves every run
-        # TO DO: Add a command line argument to switch between these
+        # epoch += 1
+
+        total_time = time.time()-start
+        #total_time = torch.tensor(total_time)
+        #dist.all_reduce(total_time)
+        #total_time /= gc.world_size
+
+        if comm_rank == 0: 
+            print(f"Time For inference:", total_time, "s")
+
+        
         #save model if desired
         # if (pargs.save_frequency > 0) and (epoch % pargs.save_frequency == 0):
         #     logger.log_start(key = "save_start", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
@@ -256,27 +267,31 @@ def main(pargs):
         #             'optimizer': optimizer.state_dict()
         #         }
         #         torch.save(checkpoint, os.path.join(output_dir, pargs.model_prefix + "_step_" + str(step) + ".cpt") )
-        #     # This needs to be moved out of `comm_rank ==0` otherwise it will wait for everyone to sync
-        #     logger.log_end(key = "save_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
+        #         logger.log_end(key = "save_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
                     
         # are we done?
-        if (epoch >= pargs.max_epochs) or stop_training:
-            logger.log_start(key = "save_start", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
-            if comm_rank == 0:
-                checkpoint = {
-                    'step': step,
-                    'epoch': epoch,
-                    'model': net_train.state_dict(),
-                    'optimizer': optimizer.state_dict()
-                }
-                torch.save(checkpoint, os.path.join(output_dir, pargs.model_prefix + "_step_" + str(step) + ".cpt") )
-            # This needs to be moved out of `comm_rank ==0` otherwise it will wait for everyone to sync
-            logger.log_end(key = "save_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
-
-            break
+        # if (epoch >= pargs.max_epochs) or stop_training:
+        #     logger.log_start(key = "final_save_start", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
+        #     if comm_rank == 0:
+        #         checkpoint = {
+        #             'step': step,
+        #             'epoch': epoch,
+        #             'model': net_train.state_dict(),
+        #             'optimizer': optimizer.state_dict()
+        #         }
+        #         torch.save(checkpoint, os.path.join(output_dir, pargs.model_prefix + "_step_" + str(step) + ".cpt") )
+        #         logger.log_end(key = "final_save_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
+        #     break
 
     # run done
-    logger.log_end(key = "run_stop", sync = True, metadata = {'status' : 'success'})
+    logger.log_end(key = "run_inference_stop", sync = True, metadata = {'status' : 'success'})
+
+    predictions_file = os.path.join(output_dir, "predictions.npy")
+    np.save(predictions_file, predictions)
+    logger.log_event(key="predictions_saved", value=predictions_file)
+
+    print(f"Inference completed. Predictions saved to {predictions_file}")
+
 
 
 if __name__ == "__main__":
@@ -286,3 +301,4 @@ if __name__ == "__main__":
     
     #run the stuff
     main(pargs)
+

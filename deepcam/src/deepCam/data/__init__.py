@@ -61,5 +61,11 @@ def get_dataloaders(pargs, root_dir, device, seed, comm_size, comm_rank):
                                    drop_last = False)
     
     validation_size = validation_set.global_size    
-        
-    return train_loader, train_size, validation_loader, validation_size
+
+    inference_loader = DataLoader(validation_set,
+                            1,
+                            num_workers = min([pargs.max_inter_threads, pargs.local_batch_size]),
+                            pin_memory = True,
+                            drop_last = False)
+
+    return train_loader, train_size, validation_loader, validation_size, inference_loader
