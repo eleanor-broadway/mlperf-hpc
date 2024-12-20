@@ -35,7 +35,7 @@ def train_epoch(pargs, comm_rank, comm_size,
                 net, criterion, 
                 optimizer, scheduler,
                 train_loader,
-                logger):
+                logger, writer):
 
     # make sure net is set to train
     net.train()
@@ -115,4 +115,7 @@ def train_epoch(pargs, comm_rank, comm_size,
     logger.log_event(key = "train_accuracy", value = iou_avg_train, metadata = {'epoch_num': epoch+1, 'step_num': step})
     logger.log_event(key = "train_loss", value = loss_avg_train, metadata = {'epoch_num': epoch+1, 'step_num': step}) 
     
+    writer.add_scalar("Accuracy/train", iou_avg_train, epoch+1)
+    writer.add_scalar("Loss/train", loss_avg_train, epoch+1)
+
     return step

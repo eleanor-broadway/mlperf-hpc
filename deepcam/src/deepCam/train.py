@@ -25,6 +25,7 @@ import os
 import numpy as np
 import datetime as dt
 import subprocess as sp
+import time 
 
 # logging
 import utils.mlperf_log_utils as mll
@@ -42,6 +43,9 @@ from utils import optimizer_helpers as oh
 from utils import bnstats as bns
 from data import get_dataloaders, get_datashapes
 from architecture import deeplab_xception
+
+# Tensorboard 
+from torch.utils.tensorboard import SummaryWriter
 
 # DDP
 import torch.distributed as dist
@@ -66,6 +70,9 @@ def main(pargs):
     logger = mll.mlperf_logger(log_file, "deepcam", "Umbrella Corp.")
     logger.log_start(key = "init_start", sync = True)        
     logger.log_event(key = "cache_clear")
+
+    # For Tensorboard
+    writer = SummaryWriter()
     
     #set seed
     seed = pargs.seed
@@ -202,6 +209,7 @@ def main(pargs):
 
         # start epoch
         logger.log_start(key = "epoch_start", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync=True)
+        start = time.time()
 
         train_loader.sampler.set_epoch(epoch)
 
@@ -211,7 +219,7 @@ def main(pargs):
                            net_train, criterion, 
                            optimizer, scheduler,
                            train_loader,
-                           logger)
+                           logger, writer)
 
         # average BN stats
         bnstats_handler.synchronize()
@@ -225,9 +233,34 @@ def main(pargs):
         # log the epoch
         logger.log_end(key = "epoch_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
         epoch += 1
-        
+        total_time = time.time()-start
+        if comm_rank == 0: 
+            print(f"Time For Epoch", epoch, ":", total_time, "s")
+
+
+        # Use this to print out the energy counters after each epoch: 
+        # command = ["rocm-smi", "--showenergycounter"]
+        # result = sp.run(command, capture_output=True, text=True)
+        # print(result.stdout)
+
+        # Moving this down so that it saves every run
+        # TO DO: Add a command line argument to switch between these
         #save model if desired
-        if (pargs.save_frequency > 0) and (epoch % pargs.save_frequency == 0):
+        # if (pargs.save_frequency > 0) and (epoch % pargs.save_frequency == 0):
+        #     logger.log_start(key = "save_start", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
+        #     if comm_rank == 0:
+        #         checkpoint = {
+        #             'step': step,
+        #             'epoch': epoch,
+        #             'model': net_train.state_dict(),
+        #             'optimizer': optimizer.state_dict()
+        #         }
+        #         torch.save(checkpoint, os.path.join(output_dir, pargs.model_prefix + "_step_" + str(step) + ".cpt") )
+        #     # This needs to be moved out of `comm_rank ==0` otherwise it will wait for everyone to sync
+        #     logger.log_end(key = "save_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
+                    
+        # are we done?
+        if (epoch >= pargs.max_epochs) or stop_training:
             logger.log_start(key = "save_start", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
             if comm_rank == 0:
                 checkpoint = {
@@ -237,10 +270,9 @@ def main(pargs):
                     'optimizer': optimizer.state_dict()
                 }
                 torch.save(checkpoint, os.path.join(output_dir, pargs.model_prefix + "_step_" + str(step) + ".cpt") )
-                logger.log_end(key = "save_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
-                    
-        # are we done?
-        if (epoch >= pargs.max_epochs) or stop_training:
+            # This needs to be moved out of `comm_rank ==0` otherwise it will wait for everyone to sync
+            logger.log_end(key = "save_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
+
             break
 
     # run done

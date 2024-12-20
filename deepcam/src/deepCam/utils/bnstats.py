@@ -77,7 +77,8 @@ class BatchNormStatsSynchronize(nn.Module):
     def synchronize(self):
         if dist.is_initialized():
             # sync the device before
-            torch.cuda.synchronize()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             
             with torch.no_grad():
                 if not self.inplace:
